@@ -11,6 +11,7 @@ app = Flask(__name__)
 def index():
     return render_template("index.html")
 
+# This route "/dropdown" is called by a script in the index.html to get the options for the dropdown menu
 @app.route("/dropdown")
 def dropdown():
     df = pd.read_csv("combined_data.csv") # Read the CSV file
@@ -28,14 +29,14 @@ def runModelGlobal():
     split_year = int(request.args.get("split_year", 2010))
     features_string = request.args.get("features", "")
     features = [f for f in features_string.split(",") if f]
-    crop = (request.args.get("status")) # Read the status (crop) from the query string 
+    crop = request.args.get("status") # Read the status (crop) from the query string 
 
     # # dataset path
     dataset_path = "combined_data.csv"
     dataframe = pd.read_csv(dataset_path)
 
     df = dataframe.copy()
-    df = df[df["Crop"] == crop]
+    df = df[df["Crop"] == crop] # Filter the DataFrame to include only rows where the "Crop" column matches the selected crop
     df["Area"] = df["Area"].astype("category")
     df["Crop"] = df["Crop"].astype("category")
 
