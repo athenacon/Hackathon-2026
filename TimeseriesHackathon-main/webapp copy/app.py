@@ -119,12 +119,12 @@ def runModelGlobal():
     y_train_scaled = target_scaler.fit_transform(y_train_raw)
     y_test_scaled  = target_scaler.transform(y_test_raw)
 
-    look_back = max(1, min(5, len(train_df_lstm) // 3)) # Set the look_back parameter to be between 1 and 5, or less if the training set is very small
+    look_back = max(1, min(5, len(train_df_lstm) // 3)) # Set the look_back parameter to be between 1 and 5
 
-    X_combined = np.vstack((X_train_scaled[-look_back:], X_test_scaled))
+    X_combined = np.vstack((X_train_scaled[-look_back:], X_test_scaled)) # Combine the last look_back rows of the scaled training features with the scaled test features to create a single array for LSTM input
     y_combined = np.vstack((y_train_scaled[-look_back:], y_test_scaled))
 
-    X_lstm_train, y_lstm_train = pre_process(X_train_scaled, y_train_scaled, look_back)
+    X_lstm_train, y_lstm_train = pre_process(X_train_scaled, y_train_scaled, look_back) # Preprocess the scaled training features and target variable to create sequences of data for LSTM input, using the look_back parameter to determine the length of the sequences
     X_lstm_test, y_lstm_test = pre_process(X_combined, y_combined, look_back)
 
     model_LSTM = Sequential()
@@ -141,18 +141,15 @@ def runModelGlobal():
     LSTM_r2 = sklearn.metrics.r2_score(te, pred_transform)
 
 #------------------------------------------Linear Regression model----------------------------------------------------------------------------
-    x_train_lin = X_train.apply(pd.to_numeric, errors='coerce')
-    y_train_lin = y_train.apply(pd.to_numeric, errors='coerce')
-    x_test_lin = X_test.apply(pd.to_numeric, errors='coerce')
-    y_test_lin = y_test.apply(pd.to_numeric, errors='coerce')
-    x_train_lin.fillna(0, inplace=True)
-    y_train_lin.fillna(0, inplace=True)
-    x_test_lin.fillna(0, inplace=True)
-    y_test_lin.fillna(0, inplace=True)
-    
+    X_train_lin = train_df_lstm[features_lstm].values
+    y_train_lin = train_df_lstm["Crop_Yield"]
+
+    X_test_lin = test_df_lstm[features_lstm].values
+    y_test_lin = test_df_lstm["Crop_Yield"]
+
     lin_model = LinearRegression()
-    lin_model.fit(x_train_lin, y_train_lin)
-    lin_preds = lin_model.predict(x_test_lin)
+    lin_model.fit(X_train_lin, y_train_lin)
+    lin_preds = lin_model.predict(X_test_lin)
 
     lin_r2 = sklearn.metrics.r2_score(y_test_lin, lin_preds)
     lin_mse = sklearn.metrics.mean_squared_error(y_test_lin, lin_preds)
