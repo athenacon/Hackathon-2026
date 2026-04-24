@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Group 1</title>
+  <title>XGBoost Runner</title>
 
 
   <!-- Imports -->
@@ -22,7 +22,6 @@
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .error  { color: red; }
     .seed-input { width: 80px; margin-right: 12px; padding: 8px; font-size: 16px; }
-    .split-input { width: 80px; margin-right: 12px; padding: 8px; font-size: 16px; }
   </style>
 
 </head>
@@ -37,100 +36,73 @@
   <script type="text/babel">
 
     // Pull out the hooks and chart components we need from the loaded libraries
-    const { useState, useEffect } = React;
+    const { useState } = React;
     const { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
-
-    const ALL_FEATURES = [
-      { key: "Area", label: "Area" },
-      { key: "Year", label: "Year" }, 
-      { key: "average_rain_fall_mm_per_year", label: "Rainfall" },
-      { key: "avg_temp", label: "Temperature" },
-      { key: "pesticide_amount", label: "Pesticide" },
-    ];
-    const MIN_SPLIT_YEAR = 1991;
-    const MAX_SPLIT_YEAR = 2013; 
 
     function App() {
 
       // useState holds values that, when changed, cause React to re-render the page
       // Each returns [currentValue, functionToUpdateIt]
-      const [results, setResults]         = useState([]);    // predictions vs actuals from the model
-      const [results_LSTM, setResults_LSTM] = useState([]);    // predictions vs actuals from the LSTM model
-      const [linresults, setlinResults]   = useState([]); 
-      const [importances, setImportances] = useState([]);    // feature importance scores
+      // feature importance scores
       const [loading, setLoading]         = useState(false); // true while waiting for the server
       const [error, setError]             = useState(null);  // holds an error message if fetch fails
       const [seed, setSeed]               = useState(42);    // random seed for data generation and model
-
-      // metrics r2 / mse
-      const [metrics, setMetrics]         = useState(null);  // holds model performance metrics
-      const [splitYear, setSplitYear] = useState(2010);
-      const [selectedFeatures, setSelectedFeatures] = useState(["Area", "Year"]);
-
-
-      const [status, setStatus]           = useState("");
-      const [options, setOptions]         = useState([]);
-  
-      function toggleFeature(featureKey) {
-        setSelectedFeatures(prev => {
-          if (prev.includes(featureKey)) {
-            return prev.filter(f => f !== featureKey);
-          }
-          return [...prev, featureKey];
-        });
-        setError(null);
-      }
-
-      useEffect(() => {
-        fetch("/dropdown")
-          .then(res => res.json())
-          .then(data => setOptions(data));
-
-          if (options.length > 0) {
-            setStatus(options[0].value); // Set the default value to the first option
-          }
-      }, []);    
-      // Global model year and features selected.
+      const [graphData, setGraphData]     = useState([]);
+      const [bang_potgraphData, setbang_potGraphData]     = useState([]);
+      const [bang_wheatgraphData, setbang_wheatGraphData]     = useState([]);
+      const [metrics, setMetrics]         = useState(null);
       // This function runs when the button is clicked
       // It calls the Flask /run route and stores the response in state
-      async function runModelGlobal() {
-        if (selectedFeatures.length === 0) {
-          setError("Select at least one feature.");
-          return;
-        }
-        if (splitYear < MIN_SPLIT_YEAR || splitYear > MAX_SPLIT_YEAR || isNaN(splitYear) || !Number.isInteger(Number(splitYear))) {
-          setError(`Split year must be between ${MIN_SPLIT_YEAR} and ${MAX_SPLIT_YEAR}.`);
-          return;
-        }
+      async function runModel() {
         setLoading(true);  // disables the button while running
         setError(null);    // clear any previous error
-
         try {
-          const featuresString = selectedFeatures.join(",");
-          // const res  = await fetch(`/run?seed=${seed}`); // call the Flask backend, passing the seed 
-          const res  = await fetch(`/runModelGlobal?seed=${seed}&split_year=${splitYear}&features=${featuresString}&status=${status}`);
+          const res  = await fetch(`/run?seed=${seed}`); // call the Flask backend, passing the seed
           const data = await res.json();           // parse the JSON response
-        
-          setResults(data.results);                // store predictions vs actuals
-          setImportances(data.importances);        // store feature importances
-          setMetrics(data.metrics);                // store model performance metrics
-          setResults_LSTM(data.results_LSTM);      // store LSTM predictions vs actuals
-          setlinResults(data.results_linear);      // store Linear Regression predictions vs actuals
+          const formatted = data.x.map((xVal, i) => ({
+            x: xVal,
+            y: data.original_pred[i],
+            actual: data.original_actual[i]
+          }));
+          setGraphData(formatted);
+
+          const bang_potformatted = data.x.map((xVal, i) => ({
+            x: xVal,
+            y: data.bang_pot_pred[i],
+            actual: data.bang_pot_actual[i]
+          }));
+          setbang_potGraphData(bang_potformatted);
+
+          const bang_wheatformatted = data.x.map((xVal, i) => ({
+            x: xVal,
+            y: data.bang_wheat_pred[i],
+            actual: data.bang_wheat_actual[i]
+          }));
+          setbang_wheatGraphData(bang_wheatformatted);
+
+          setMetrics({
+          rmse: data.original_rmse,
+          r2: data.original_r2,
+          bang_pot_rmse: data.bang_pot_rmse,
+          bang_pot_r2: data.bang_pot_r2,
+          bang_wheat_rmse: data.bang_wheat_rmse,
+          bang_wheat_r2: data.bang_wheat_r2
+          });
+
         } catch (e) {
           setError("Failed to run model. Is the Flask server running?");
         } finally {
           setLoading(false); // re-enable the button whether it succeeded or failed
         }
-
       }
 
       // JSX this looks like HTML but is transformed by Babel into JavaScript (blah blah blah)
       // React re-renders this whenever there is a state change
       return (
         <div>
-          <h1>Group 1 Hackathon Spring Week</h1>
-          <h4>Choose the temporal split, the crop, and the feature set, then runs XGBoost, LSTM and linear regression models.</h4>
-          <h4>Split semantics: train on years &lt; split year  test on years &gt;=  split year. <p>Years: 1990-2013 </p> </h4>
+          <h1>XGBoost Model Runner</h1>
+          <p>Trains an XGBoost regressor on synthetic data and plots the results.</p>
+
           {/* Number input — onChange updates the seed state as the user types */}
           <label>
             Seed: <input
@@ -140,124 +112,99 @@
               className="seed-input"
             />
           </label>
-          <label>
-            Split Year: <input
-              type="number"
-              value={splitYear}
-              min={MIN_SPLIT_YEAR}
-              max={MAX_SPLIT_YEAR}
-              onChange={e => setSplitYear(e.target.value)}
-              className="split-input"
-            />
-          </label>
 
-          <select value={status} onChange={e => setStatus(e.target.value)}>
-            <option value="">Select a crop</option>
-            {options.map(opt => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-           
-          <h3>Select features</h3>
-
-          <div className="feature-list">
-            {ALL_FEATURES.map(feature => (
-              <label key={feature.key} className="feature-item">
-                <input
-                  type="checkbox"
-                  checked={selectedFeatures.includes(feature.key)}
-                  onChange={() => toggleFeature(feature.key)}
-                />
-                {" "}{feature.label}
-              </label>
-            ))}
-          </div>
-            {/* onClick wires the button to runModel(); disabled prevents double-clicking */}
-            <button onClick={runModelGlobal} disabled={loading}>
-             {loading ? "Running..." : "Run Model"}
+          {/* onClick wires the button to runModel(); disabled prevents double-clicking */}
+          <button onClick={runModel} disabled={loading}>
+            {loading ? "Running..." : "Run Model"}
           </button>
- 
 
           {/* Only renders the error message if error is not null */}
           {error && <p className="error">{error}</p>}
 
           {/* Only renders the charts once results have been loaded */}
-          {results.length > 0 && (
-            <div>
-
-              <h2>Predictions vs Actuals</h2>
-              {/* ResponsiveContainer makes the chart fill its parent width */}
+            <div>            
+              <h2>Model Results</h2>
               <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={results}>
-                  <CartesianGrid strokeDasharray="3 3" />  {/* background grid */}
-                  <XAxis dataKey="index" />                {/* x axis uses the "index" field */}
+                <LineChart data={graphData}>
+                  <XAxis dataKey="x" />
                   <YAxis />
-                  <Tooltip />                              {/* shows values on hover */}
-                  <Legend />                               {/* colour key */}
-                  {/* dataKey matches the field names returned by Flask */}
-                  <Line type="monotone" dataKey="actual"    stroke="#2563eb" dot={false} strokeWidth={2} />
-                  <Line type="monotone" dataKey="predicted" stroke="#f97316" dot={false} strokeWidth={2} />
+                  {/* Predicted line */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="y" 
+                    stroke="#2563eb" 
+                    strokeWidth={2}
+                  />
+
+                  {/* Actual line */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="actual" 
+                    stroke="#f97316" 
+                    strokeWidth={2}
+                  />
                 </LineChart>
               </ResponsiveContainer>
 
-              <h2>LSTM Predictions vs Actuals</h2>
-              {/* ResponsiveContainer makes the chart fill its parent width */}
+              <h2>Bangladesh Potato Results</h2>
               <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={results_LSTM}>
-                  <CartesianGrid strokeDasharray="3 3" />  {/* background grid */}
-                  <XAxis dataKey="index" />                {/* x axis uses the "index" field */}
+                <LineChart data={bang_potgraphData}>
+                  <XAxis dataKey="x" />
                   <YAxis />
-                  <Tooltip />                              {/* shows values on hover */}
-                  <Legend />                               {/* colour key */}
-                  {/* dataKey matches the field names returned by Flask */}
-                  <Line type="monotone" dataKey="actual"    stroke="#2563eb" dot={false} strokeWidth={2} />
-                  <Line type="monotone" dataKey="predicted" stroke="#f97316" dot={false} strokeWidth={2} />
+                  {/* Predicted line */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="y" 
+                    stroke="#2563eb" 
+                    strokeWidth={2}
+                  />
+
+                  {/* Actual line */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="actual" 
+                    stroke="#f97316" 
+                    strokeWidth={2}
+                  />
                 </LineChart>
               </ResponsiveContainer>
 
-              <h2>Linear Regression Predictions vs Actuals</h2>
-              {/* ResponsiveContainer makes the chart fill its parent width */}
+              <h2>Bangladesh Wheat Results</h2>
               <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={linresults}>
-                  <CartesianGrid strokeDasharray="3 3" />  {/* background grid */}
-                  <XAxis dataKey="index" />                {/* x axis uses the "index" field */}
+                <LineChart data={bang_wheatgraphData}>
+                  <XAxis dataKey="x" />
                   <YAxis />
-                  <Tooltip />                              {/* shows values on hover */}
-                  <Legend />                               {/* colour key */}
-                  {/* dataKey matches the field names returned by Flask */}
-                  <Line type="monotone" dataKey="actual"    stroke="#2563eb" dot={false} strokeWidth={2} />
-                  <Line type="monotone" dataKey="predicted" stroke="#f97316" dot={false} strokeWidth={2} />
+                  {/* Predicted line */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="y" 
+                    stroke="#2563eb" 
+                    strokeWidth={2}
+                  />
+
+                  {/* Actual line */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="actual" 
+                    stroke="#f97316" 
+                    strokeWidth={2}
+                  />
                 </LineChart>
               </ResponsiveContainer>
+            </div>     
 
-              <h2>Feature Importances</h2>
-              <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={importances}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="feature" />              {/* x axis uses the "feature" field */}
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="importance" fill="#2563eb" />
-                </BarChart>
-              </ResponsiveContainer>
-
-            </div>
-            
-          )}
             {metrics && (
               <div>
-                <h2>Model Performance Metrics</h2>
-                <ul>
-                  {Object.entries(metrics).map(([key, value]) => (
-                    <li key={key}>{key}: {value}</li>
-                  ))}
-                </ul>
+                <h2>Model Performances</h2>
+                <p><strong>R² Score:</strong> {metrics.r2.toFixed(4)}</p>
+                <p><strong>RMSE:</strong> {metrics.rmse.toFixed(4)}</p>
+                <p><strong>Bangladesh Potato R² Score:</strong> {metrics.bang_pot_r2.toFixed(4)}</p>
+                <p><strong>Bangladesh Potato RMSE:</strong> {metrics.bang_pot_rmse.toFixed(4)}</p>
+                <p><strong>Bangladesh Wheat R² Score:</strong> {metrics.bang_wheat_r2.toFixed(4)}</p>
+                <p><strong>Bangladesh Wheat RMSE:</strong> {metrics.bang_wheat_rmse.toFixed(4)}</p>
               </div>
             )}
-        </div>
-        
+        </div>     
       );
     }
 

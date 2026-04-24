@@ -1,201 +1,150 @@
-from pyexpat import features
-
 from flask import Flask, jsonify, render_template, request
-import xgboost as xgb
-from sklearn.datasets import make_regression
-from sklearn.model_selection import train_test_split
 import pandas as pd
-import sklearn.metrics
 import numpy as np
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import tensorflow as tf
 import keras
 from keras.layers import Dense
 from keras.layers import LSTM
 from keras.models import Sequential
 from keras.models import *
-from sklearn.linear_model import LinearRegression
+import matplotlib.pyplot as plt
+
+
 app = Flask(__name__)
 
 # This route "/" is the default page, this will run when the browerser runs the URL
 @app.route("/")
 def index():
-    return render_template("index.html")
-
-# This route "/dropdown" is called by a script in the index.html to get the options for the dropdown menu
-@app.route("/dropdown")
-def dropdown():
-    df = pd.read_csv("combined_data.csv") # Read the CSV file
-    crops = df["Crop"].unique().tolist() # Get the unique values from the "Crop" column and convert to a list 
-
-    options = [{"value": c, "label": c} for c in crops]# Create a list of dictionaries with "value" and "label" keys for each crop
-
-    return jsonify(options)
-
-# This is called by a acript in the index.html
-@app.route("/runModelGlobal")
-def runModelGlobal():
-    def pre_process(X, y, look_back):
-        X_out, y_out = [], []
-
-        for i in range(look_back, len(X)):
-            X_out.append(X[i - look_back:i, :])
-            y_out.append(y[i, 0])
-
-        return np.array(X_out), np.array(y_out)
+    return render_template("index.html")  # Pass the name variable to the template
     
-    # Read the seed from the query string e.g. /run?seed=42, default to 42 if not provided
-    seed = int(request.args.get("seed", 42))
-    split_year = int(request.args.get("split_year", 2010))
-    features_string = request.args.get("features", "")
-    features = [f for f in features_string.split(",") if f]
-    crop = request.args.get("status") # Read the status (crop) from the query string 
+# This is called by a acript in the index.html
+@app.route("/run")
 
-    # # dataset path
-    dataset_path = "combined_data.csv"
-    dataframe = pd.read_csv(dataset_path)
+#------------------------------------------Pre-Processing-------------------------------------
+def run_model():
+    def pre_process(data, look_back = 20):
+        #data = data.to_numpy()
+        X = []
+        y = []
 
-    df = dataframe.copy()
-    df = df[df["Crop"] == crop] # Filter the DataFrame to include only rows where the "Crop" column matches the selected crop
-    df["Area"] = df["Area"].astype("category")
-    df["Crop"] = df["Crop"].astype("category")
+        for i in range(look_back, len(data)):
+            X.append(data[i - look_back:i, 0])
+            y.append(data[i, 0])
 
-    df["average_rain_fall_mm_per_year"] = pd.to_numeric(df["average_rain_fall_mm_per_year"], errors="coerce")
-    cols = [
-    "Area",
-    "Year",
-    "Crop",
-    "average_rain_fall_mm_per_year",
-    "avg_temp",
-    "pesticide_amount",
-    "Crop_Yield",
-    ]
-    df = df.dropna(subset=cols)
-    df = df.sort_values('Year')
+        return np.array(X), np.array(y)   
+#----------------------------------------Read Data in----------------------------------------
+    df = pd.read_csv("combined_data.csv")
+    df1 = df.where(df['Area']=="Australia")
+    df1 = df1.where(df['Crop']=="Maize")
+    df1 = df1.dropna(how='any',axis=0) 
+    df1['Year'] = pd.to_datetime(df1['Year'])
+    df1.set_index("Year", inplace=True)
+    data = df1["Crop_Yield"].astype(float).values.reshape(-1,1)
+    #--------------------------------------------manipulate data------------------------------
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    data = scaler.fit_transform(data)
 
-    train_df = df[df['Year'] < split_year]
-    test_df = df[df['Year'] >= split_year]
+    look_back = 20
+    X, y = pre_process(data)
 
-    X_train = train_df[features]
-    y_train = train_df["Crop_Yield"]
+    target_dates = df.index[look_back:len(data)]
+    X_train, X_test, y_train, y_test, dates_train, dates_test = train_test_split(X, y, target_dates, test_size=0.3, shuffle=False)
 
-    X_test = test_df[features]
-    y_test = test_df["Crop_Yield"]
+    X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+    X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
 
-    #Create, fit and run out model
-    model = xgb.XGBRegressor(n_estimators=100, max_depth=4, random_state=seed, enable_categorical=True)
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
+    #---------------------------------------------Model-------------------------------------------
+    model = Sequential()
+    model.add(LSTM(16, input_shape=(1,1)))
+    model.add(Dense(8))
+    model.add(Dense(1, 'sigmoid'))
+    model.compile(loss='mean_squared_error', optimizer='adam')
+    model.fit(X_train, y_train, epochs=100, batch_size=10, verbose=2)
 
-    # results /  actuals
-    r2 = sklearn.metrics.r2_score(y_test, preds)
-    mse = sklearn.metrics.mean_squared_error(y_test, preds)
+    pred = model.predict(X_test)
+    origanl_RMSE = np.sqrt(mean_squared_error(y_test, pred))
+    origanl_r2 = r2_score(y_test, pred)
 
 
-    #--------------------------------------------------------------------------------------------------LSTM model----------------------------------------------------------------------------
+    pred_transform = scaler.inverse_transform(pred).flatten()
+    te = scaler.inverse_transform(y_test.reshape(-1,1)).flatten()
 
-    df1 = df.copy()
-    df1 = df1.sort_values('Year')
+    #--------------------------------------------Test on Potatoes-------------------------------------------
+    df2 = df.where(df['Area']=="Australia")
+    df2 = df2.where(df['Crop']=="Potatoes")
+    df2 = df2.dropna(how='any',axis=0) 
+    df2['Year'] = pd.to_datetime(df2['Year'])
+    df2.set_index("Year", inplace=True)
+    data2 = df2["Crop_Yield"].astype(float).values.reshape(-1,1)
+    data2 = scaler.fit_transform(data2)
 
-    categorical_cols = df1.select_dtypes(include=["object", "category"]).columns.tolist() # Get the list of categorical columns in the DataFrame
-    df1 = pd.get_dummies(df1, columns=categorical_cols) # Convert categorical columns to dummy variables (one-hot encoding)
 
-    train_df_lstm = df1[df1['Year'] < split_year] # Filter the DataFrame to include only rows where the "Year" column is less than the split_year - repeated from early to not mess with the results of the XGBoost model
-    test_df_lstm  = df1[df1['Year'] >= split_year]
+    potatoeX, potatoey = pre_process(data2)
+    potatoeX = potatoeX.reshape((potatoeX.shape[0], potatoeX.shape[1], 1))
+    prediction_potatoe = model.predict(potatoeX)
+    prediction_potatoe_actual = scaler.inverse_transform(prediction_potatoe)
+    potatoey_actual = scaler.inverse_transform(potatoey.reshape(-1,1)).flatten()
+    testScore_potatoe = np.sqrt(mean_squared_error(potatoey, prediction_potatoe))
 
-    train_df_lstm, test_df_lstm = train_df_lstm.align(test_df_lstm, join='left', axis=1, fill_value=0) # Align the train and test DataFrames to have the same columns, filling missing values with 0
-    features_lstm = [col for col in train_df_lstm.columns if col not in ["Crop_Yield",]] # Get the list of feature columns for the LSTM model, excluding "Crop_Yield" 
-    X_train_raw = train_df_lstm[features_lstm].values # Extract the feature values for the training set as a NumPy array
-    X_test_raw  = test_df_lstm[features_lstm].values
 
-    y_train_raw = train_df_lstm["Crop_Yield"].values.reshape(-1, 1) # Extract the target variable values for the training set as a NumPy array and reshape to be a 2D array with one column
-    y_test_raw  = test_df_lstm["Crop_Yield"].values.reshape(-1, 1)
+    #--------------------------------------------Test on Wheat-------------------------------------------
+    df3 = df.where(df['Area']=="Australia")
+    df3 = df3.where(df['Crop']=="Wheat")
+    df3 = df3.dropna(how='any',axis=0) 
+    df3['Year'] = pd.to_datetime(df3['Year'])
+    df3.set_index("Year", inplace=True)
+    data3 = df3["Crop_Yield"].astype(float).values.reshape(-1,1)
+    data3 = scaler.fit_transform(data3)
 
-    feature_scaler = MinMaxScaler()
-    X_train_scaled = feature_scaler.fit_transform(X_train_raw) # Scale the feature values for the training set to be between 0 and 1 using MinMaxScaler
-    X_test_scaled  = feature_scaler.transform(X_test_raw)
+    wheatX, wheaty = pre_process(data3)
+    wheatX = wheatX.reshape((wheatX.shape[0], wheatX.shape[1], 1))
+    prediction_wheat = model.predict(wheatX)
+    prediction_wheat_actual = scaler.inverse_transform(prediction_wheat)
+    wheaty_actual = scaler.inverse_transform(wheaty.reshape(-1,1)).flatten()
 
-    target_scaler = MinMaxScaler()
-    y_train_scaled = target_scaler.fit_transform(y_train_raw)
-    y_test_scaled  = target_scaler.transform(y_test_raw)
+    testScore_wheat = np.sqrt(mean_squared_error(wheaty, prediction_wheat))
 
-    look_back = max(1, min(5, len(train_df_lstm) // 3)) # Set the look_back parameter to be between 1 and 5
+    #--------------------------------------------Test on Potatoes (Bangladesh)-------------------------------------------
+    df4 = df.where(df['Area']=="Bangladesh")
+    df4 = df4.where(df['Crop']=="Potatoes")
+    df4 = df4.dropna(how='any',axis=0) 
+    df4['Year'] = pd.to_datetime(df4['Year'])
+    df4.set_index("Year", inplace=True)
+    data4 = df4["Crop_Yield"].astype(float).values.reshape(-1,1)
+    data4 = scaler.fit_transform(data4)
 
-    X_combined = np.vstack((X_train_scaled[-look_back:], X_test_scaled)) # Combine the last look_back rows of the scaled training features with the scaled test features to create a single array for LSTM input
-    y_combined = np.vstack((y_train_scaled[-look_back:], y_test_scaled))
 
-    X_lstm_train, y_lstm_train = pre_process(X_train_scaled, y_train_scaled, look_back) # Preprocess the scaled training features and target variable to create sequences of data for LSTM input, using the look_back parameter to determine the length of the sequences
-    X_lstm_test, y_lstm_test = pre_process(X_combined, y_combined, look_back)
+    potatoe_bangladeshX, potatoey_bangladesh = pre_process(data4)
+    potatoe_bangladeshX = potatoe_bangladeshX.reshape((potatoe_bangladeshX.shape[0], potatoe_bangladeshX.shape[1], 1))
+    prediction_potatoe_bangladesh = model.predict(potatoe_bangladeshX)
+    prediction_potatoe_bangladesh_actual = scaler.inverse_transform(prediction_potatoe_bangladesh)
+    potatoey_bangladesh_actual = scaler.inverse_transform(potatoey_bangladesh.reshape(-1,1)).flatten()
 
-    model_LSTM = Sequential()
-    model_LSTM.add(LSTM(16, input_shape=(X_lstm_train.shape[1], X_lstm_train.shape[2])))
-    model_LSTM.add(Dense(8))
-    model_LSTM.add(Dense(1))
-    model_LSTM.compile(loss='mean_squared_error', optimizer='adam')
-    model_LSTM.fit(X_lstm_train, y_lstm_train, epochs=100, batch_size=50, verbose=2)
+    testScore_potatoe_bangladesh = np.sqrt(mean_squared_error(potatoey_bangladesh, prediction_potatoe_bangladesh))
 
-    pred = model_LSTM.predict(X_lstm_test)
-    pred_transform = target_scaler.inverse_transform(pred)
-    te = target_scaler.inverse_transform(y_lstm_test.reshape(-1,1))
-    LSTM_rmse = np.sqrt(sklearn.metrics.mean_squared_error(te, pred_transform))
-    LSTM_r2 = sklearn.metrics.r2_score(te, pred_transform)
+    #--------------------------------------------Plotting Wheat (Bangladesh)-------------------------------------------
+    df5 = df.where(df['Area']=="Bangladesh")
+    df5 = df5.where(df['Crop']=="Wheat")
+    df5 = df5.dropna(how='any',axis=0) 
+    df5['Year'] = pd.to_datetime(df5['Year'])
+    df5.set_index("Year", inplace=True)
+    data5 = df5["Crop_Yield"].astype(float).values.reshape(-1,1)
+    data5 = scaler.fit_transform(data5)
 
-#------------------------------------------Linear Regression model----------------------------------------------------------------------------
-    X_train_lin = train_df_lstm[features_lstm].values
-    y_train_lin = train_df_lstm["Crop_Yield"]
+    wheat_bangladeshX, wheaty_bangladesh = pre_process(data5)
+    wheat_bangladeshX = wheat_bangladeshX.reshape((wheat_bangladeshX.shape[0], wheat_bangladeshX.shape[1], 1))
+    prediction_wheat_bangladesh = model.predict(wheat_bangladeshX)
+    prediction_wheat_bangladesh_actual = scaler.inverse_transform(prediction_wheat_bangladesh)
+    wheaty_bangladesh_actual = scaler.inverse_transform(wheaty_bangladesh.reshape(-1,1)).flatten()
 
-    X_test_lin = test_df_lstm[features_lstm].values
-    y_test_lin = test_df_lstm["Crop_Yield"]
+    testScore_wheat_bangladesh = np.sqrt(mean_squared_error(wheaty_bangladesh, prediction_wheat_bangladesh))
 
-    lin_model = LinearRegression()
-    lin_model.fit(X_train_lin, y_train_lin)
-    lin_preds = lin_model.predict(X_test_lin)
-
-    lin_r2 = sklearn.metrics.r2_score(y_test_lin, lin_preds)
-    lin_mse = sklearn.metrics.mean_squared_error(y_test_lin, lin_preds)
-#---------------------------------------------------------Resulsts---------------------------------------------------------------------------------------------------------------------------------------
-    results = [
-        {"index": i, 
-         "actual": round(float(y_test.iloc[i]), 2), 
-         "predicted": round(float(preds[i]), 2)
-        }
-        for i in range(min(50, len(y_test)))
-    ]
-
-    results_LSTM = [
-        {"index": i, 
-         "actual": round(float(te[i][0]), 2), 
-         "predicted": round(float(pred_transform[i][0]), 2)
-        }
-        for i in range(min(50, len(te)))
-    ]
-
-    results_linear = [
-        {"index": i, 
-         "actual": round(float(y_test_lin.iloc[i]), 2), 
-         "predicted": round(float(lin_preds[i]), 2)
-        }
-        for i in range(min(50, len(y_test_lin)))
-    ]
-
-    # metrics
-    metrics = {
-        "XGBoost_r2": round(r2, 4),
-        "XGBoost_mse": round(mse, 4),
-        "LSTM_rmse": round(LSTM_rmse, 4),
-        "LSTM_r2": round(LSTM_r2, 4),
-        "LinearRegression_r2": round(lin_r2, 4),
-        "LinearRegression_mse": round(lin_mse, 4)
-    }
-
-    #feature importance results
-    importances = [
-        {"feature": col, "importance": round(float(v), 4)}
-        for col, v in zip(X_train.columns, model.feature_importances_)
-    ]
-    #return these results to script in index.html
-    return jsonify({"results": results, "importances": importances, "metrics": metrics, "results_LSTM": results_LSTM, "results_linear": results_linear})
-
+    return jsonify({"x":dates_test.tolist(), "original_actual": te.tolist(), "original_pred": pred_transform.tolist(), "original_rmse": float(origanl_RMSE), "original_r2": float(origanl_r2),
+                    "bang_pot_actual": potatoey_bangladesh_actual.tolist(), "bang_pot_pred": prediction_potatoe_bangladesh_actual.tolist(), "bang_pot_rmse": float(testScore_potatoe_bangladesh), "bang_pot_r2": float(r2_score(potatoey_bangladesh, prediction_potatoe_bangladesh)),
+                    "bang_wheat_actual": wheaty_bangladesh_actual.tolist(), "bang_wheat_pred": prediction_wheat_bangladesh_actual.tolist(), "bang_wheat_rmse": float(testScore_wheat_bangladesh), "bang_wheat_r2": float(r2_score(wheaty_bangladesh, prediction_wheat_bangladesh))})
 
 # Start the server if this file is run directly (python app.py)
 if __name__ == "__main__":
